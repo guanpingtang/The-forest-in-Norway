@@ -1,0 +1,217 @@
+rpc简介
+RPC（Remote Procedure Call Protocol）——远程过程调用协议，它是一种通过网络从远程计算机程序上请求服务，而不需要了解底层网络技术的协议。RPC协议假定某些传输协议的存在，如TCP或UDP，为通信程序之间携带信息数据。在OSI网络通信模型中，RPC跨越了传输层和应用层。RPC使得开发包括网络分布式多程序在内的应用程序更加容易。说得通俗一点就是：调用远程计算机上的服务，就像调用本地服务一样。
+
+grpc开发流程
+GRPC是google开源的一个高性能、跨语言的RPC框架，基于HTTP2协议，基于protobuf3.x，基于Netty 4.x+。 对于开发者而言：
+
+需要使用protobuf定义接口，即.proto文件
+使用compile工具生成特定语言的执行代码，比如JAVA、C/C++、Python等。为了解决跨语言问题。
+启动一个Server端，server端通过侦听指定的port，来等待Client链接请求，通常使用Netty来构建，GRPC内置了Netty的支持。
+启动一个或者多个Client端，Client也是基于Netty，Client通过与Server建立TCP长链接，并发送请求；Request与Response均被封装成HTTP2的stream Frame，通过Netty Channel进行交互。
+总结
+第一步，定义proto接口文件。
+第二部，服务端自动生成可执行文件，重写服务方法的具体实现。
+第三部，客户端，例如python，根据proto自动生成可执行文件，然后进行方法调用。
+http2参考1 http2参考2 netty参考
+
+划重点（敲黑板）
+定义proto接口文件
+直接看例子
+
+syntax = "proto3";//指定使用proto3语法
+option java_package = "com.ptest.proto";//指定protobuf生成对应语言文件(如.java)的包名
+option java_outer_classname = "UserModel";//指定类名
+
+//枚举类型
+enum PhoneType {
+    HOME = 0;
+    WORK = 1;
+    OTHER = 2;
+}
+
+//message 是一个关键字，表示定义一个可供传输的消息，可理解为一个类，里面的字段是属性
+message ProtobufUser {
+    int32 id = 1;
+    string name = 2;
+    message Phone{
+        PhoneType phoneType = 1;
+        string phoneNumber = 2;
+    }
+    //repeated 表示该字段可出现多次，可理解为数组，在这里的情景是一个人的多个电话
+    repeated Phone phones = 3;
+}
+
+//定义一个请求message，可以理解为定义客户端调用时需要传的参数
+message AddPhoneToUserRequest {
+    int32 uid = 1;
+    PhoneType phoneType = 2;
+    string phoneNumber = 3;
+}
+//定义一个请求message，可以理解为定义服务端返回的数据
+message AddPhoneToUserResponse {
+    bool result = 1;
+}
+
+//定义一个服务，里面有个方法，参数是AddPhoneToUserRequest，返回值是AddPhoneToUserResponse
+service PhoneService {
+    rpc addPhoneToUser(AddPhoneToUserRequest) returns (AddPhoneToUserResponse)
+}
+proto文件支持//形式的注释，如上。
+消息定义中的每个字段都有唯一的编号标签。这些标签用于以消息二进制格式标识字段，并且在使用消息类型后不应更改它们。请注意，值范围为1到15的标签需要一个字节进行编码，包括标识号和字段的类型。16到2047范围内的标签需要两个字节。因此，您应该为非常频繁出现的消息元素预留标签1到15。请记住为将来可能添加的频繁出现的元素留下一些空间。您可以指定的最小标签号码是1，最大的标签号码是536,870,911。您也不能使用号码19000到19999，因为它们被保留用于协议缓冲区实现。
+更多proto语法请查看官方文档。
+
+protobuf自动生成（java）
+idea 安装protobuf插件
+完整的.gradle文件
+apply plugin: 'java'
+apply plugin: 'com.google.protobuf'
+
+buildscript {
+    repositories {
+        maven {url 'http://maven.aliyun.com/nexus/content/groups/public/'}
+    }
+    dependencies {
+
+        classpath 'com.google.protobuf:protobuf-gradle-plugin:0.8.1'
+    }
+}
+
+repositories {
+
+    maven {url 'http://maven.aliyun.com/nexus/content/groups/public/'}
+}
+
+// IMPORTANT: You probably want the non-SNAPSHOT version of gRPC. Make sure you
+// are looking at a tagged version of the example and not "master"!
+
+// Feel free to delete the comment at the next line. It is just for safely
+// updating the version in our release process.
+def grpcVersion = '1.2.0' // CURRENT_GRPC_VERSION
+
+dependencies {
+    compile "com.google.api.grpc:proto-google-common-protos:0.1.9"
+    compile "io.grpc:grpc-netty:${grpcVersion}"
+    compile "io.grpc:grpc-protobuf:${grpcVersion}"
+    compile "io.grpc:grpc-stub:${grpcVersion}"
+
+    testCompile "io.grpc:grpc-testing:${grpcVersion}"
+    testCompile "junit:junit:4.12"
+    testCompile "org.mockito:mockito-core:1.9.5"
+}
+
+protobuf {
+    protoc {
+        artifact = 'com.google.protobuf:protoc:3.4.0'
+    }
+    plugins {
+        grpc {
+            artifact = "io.grpc:protoc-gen-grpc-java:${grpcVersion}"
+        }
+    }
+    generateProtoTasks {
+        all()*.plugins {
+            grpc {}
+        }
+    }
+}
+
+// Inform IntelliJ projects about the generated code.
+apply plugin: 'idea'
+
+idea {
+    module {
+        // Not using generatedSourceDirs because of
+        // https://discuss.gradle.org/t/support-for-intellij-2016/15294/8
+        sourceDirs += file("${projectDir}/build/generated/source/proto/main/java");
+        sourceDirs += file("${projectDir}/build/generated/source/proto/main/grpc");
+    }
+}
+如果成功的话，你可以在/build/generated/source/proto/main下看到对应的文件。
+
+protoc
+利用protoc工具生成代码
+安装protoc https://github.com/google/protobuf/releases/tag/v3.4.1
+cd 文件目录
+./configure
+make
+make check
+make install
+protoc --version 查看是否安装成功
+生成代码文件
+protoc --java_out=./java/(目标目录) ./proto/phonebook.proto（源文件） java版
+protoc --python_out=./java/(目标目录) ./proto/phonebook.proto（源文件） python版
+服务端干啥？
+定义的服务的具体实现
+/**
+ * 这是服务端服务，服务需要继承proto自动生成的服务，并重写定义的方法即可。
+ */
+public class PhoneServiceImp extends PhoneServiceGrpc.PhoneServiceImplBase{
+
+    private static final Logger logger = Logger.getLogger(PhoneServiceImp.class.getName());
+
+	@Override
+	public void addPhoneToUser(UserModel.AddPhoneToUserRequest request,
+							   StreamObserver<UserModel.AddPhoneToUserResponse> responseObserver) {
+
+		UserModel.AddPhoneToUserResponse response;
+
+		if(request.getPhoneNumber().length() == 11 ){
+            logger.info("uid = "+request.getUid() + ", phone type is " + request.getPhoneType() +
+                            ", nubmer is "+ request.getPhoneNumber()+"\n");
+			response = UserModel.AddPhoneToUserResponse.newBuilder().setResult(true).build();
+		}else{
+            logger.info("The phone nubmer " + request.getPhoneNumber() +" is wrong!\n");
+			response = UserModel.AddPhoneToUserResponse.newBuilder().setResult(false).build();
+		}
+		responseObserver.onNext(response);
+		responseObserver.onCompleted();
+	}
+	
+}
+指定监听端口，启动服务
+private void start() throws IOException {
+		/* The port on which the server should run */
+		int port = 50055;
+		server = ServerBuilder
+				.forPort(port)
+				.addService(new PhoneServiceImp())
+				.build()
+				.start();
+		logger.info("Server started, listening on " + port);
+		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            System.err.println("*** shutting down gRPC server since JVM is shutting down");
+            GRpcServer.this.stop();
+            System.err.println("*** server shut down");
+        }));
+	}
+客户端干啥
+指定host和端口调用服务即可
+/**
+     * 要调用服务端的方法其实就是调用proto中的方法，就像是调用本地方法一样
+     * @param uid uid
+     * @param phoneType phoneType
+     * @param phoneNubmer phoneNubmer
+     */
+	public void addPhoneToUser(int uid, UserModel.PhoneType phoneType, String phoneNubmer) {
+		logger.info("Will try to add phone to user " + uid);
+		UserModel.AddPhoneToUserRequest request = UserModel.AddPhoneToUserRequest.newBuilder()
+                .setUid(uid).setPhoneType(phoneType)
+				.setPhoneNumber(phoneNubmer).build();
+		UserModel.AddPhoneToUserResponse response;
+		try {
+			response = blockingStub.addPhoneToUser(request);
+		} catch (StatusRuntimeException e) {
+			logger.log(Level.WARNING, "RPC failed: {0}", e.getStatus());
+			return;
+		}
+		logger.info("Result: " + response.getResult());
+	}
+
+	public static void main(String[] args) throws Exception {
+		GRpcClient client = new GRpcClient("localhost", 50055);
+		try {
+			client.addPhoneToUser(1, UserModel.PhoneType.WORK, "13888888888");
+		} finally {
+			client.shutdown();
+		}
+	}
