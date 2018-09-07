@@ -1,0 +1,85 @@
+gluster文件系统
+
+机器列表
+10.90.3.90
+10.90.3.91
+
+每台机器上安装gluster服务，启动gluster
+yum install centos-release-gluster
+yum install -y glusterfs glusterfs-server glusterfs-fuse glusterfs-rdma
+systemctl start glusterd.server
+systemctl enable glusterd.server 可选
+
+在任意一台机器添加其他机器组成集群环境，gluster无中心化。
+gluster peer probe <server>  添加其他机器
+gluster pool list 查看集群列表
+gluster peer detach <server> 移除机器
+gluster peer status 查看集群状态
+gluster volume info 查看卷状态
+
+服务端搭建
+假设我们有/dev/sdb1磁盘
+注意：官方文档建议我们每个机器使用单独，并且容量一样的磁盘来作为gluster文件系统，而不是和系统磁盘在一起。本文档没有多余的磁盘，所以只能在系统磁盘上。
+
+
+块（brick）的概念
+块是存储元数据的单位，官方建议块的良好分层结构:/data/glusterfs/<volume>/<brick>/brick
+创建块存储路径
+mkdir -p /data/glusterfs/myvol1/brick1
+mount /dev/sdb1 /data/glusterfs/myvol1/brick1（本次搭建没有这块磁盘，不需要这一步操作）
+tips：每个机器上可以有多个块，但是官方不建议这样做，因为当卷（volume）模式为复制模式时，复制两份。那么会在gluster会在同一机器上的两个brick（brick）中，如果这个机器故障，将会丢失文件。所以每个机器一个卷（volume）最好只有一个块（brick）
+创建卷
+在任意一台机器上
+创建复制模式的卷：复制两份
+gluster volume create myvol1 replica 2 10.90.3.90:/data/glusterfs/myvol1/brick1 10.90.3.91:/data/glusterfs/myvol1/brick1  force
+tips：卷类型还有分发模式==不复制，只随机存储到一台机器上。复制模式==复制x份至多个机器。条带模式==把文件分割成小块，每块分别存储在不同的机器。等等。本次搭建选择复制模式。
+gluster volume start myvol1 --启动卷
+gluster volume info--查看卷信息
+
+客户端搭建
+客户端可以独立一台机器，也可在任意服务端机器上作客户端，本此搭建使用91作为客户端
+yum install -y glusterfs glusterfs-fuse
+mkdir -p /usr/share/nginx --创建客户端文件存储路径 （这个目录可以作为nginx和apache目录，以静态文件提供下载）
+mount -t glusterfs 10.90.3.90:myvol1  /usr/share/nginx  将服务端卷挂载在/usr/share/nginx
+
+测试
+在/usr/share/nginx上新增文件，在10.90.3.90和10.90.3.91的/data/glusterfs/myvol1/brick1目录下都会有该文件。
+
+总结
+glusterfs可以解决文件分布式存储的需求。
+
+其他
+详细的卷管理文参考官网：
+https://docs.gluster.org/en/latest/Administrator%20Guide/Managing%20Volumes/
+1. 查看GlusterFS中所有的volume:
+gluster volume list
+2. 删除GlusterFS磁盘：
+gluster volume stop models #停止名字为 models 的磁盘
+gluster volume delete models #删除名字为 models 的磁盘
+注：删除磁盘以后，必须删除磁盘( /opt/gluster/data ) 中的（ .glusterfs/.trashcan/）目录。否则创建新volume相同的磁盘会出现文件不分布，或者类型错乱的问题。
+3. 设置访问限制,按照每个volume 来限制
+gluster volume set models auth.allow 10.6.0.*,10.7.0.*
+4. 添加GlusterFS节点：
+gluster peer probe swarm-node-3
+gluster volume add-brick models swarm-node-3:/opt/gluster/data
+注：如果是复制卷或者条带卷，则每次添加的Brick数必须是replica或者stripe的整数倍
+5. 缩容volume:
+先将数据迁移到其它可用的Brick，迁移结束后才将该Brick移除：
+gluster volume remove-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data start
+在执行了start之后，可以使用status命令查看移除进度：
+gluster volume remove-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data status
+不进行数据迁移，直接删除该Brick：
+gluster volume remove-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data commit
+注意，如果是复制卷或者条带卷，则每次移除的Brick数必须是replica或者stripe的整数倍。
+6.扩容：
+gluster volume add-brick models swarm-node-2:/opt/gluster/data 
+7. 迁移volume:
+gluster volume replace-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data start
+pause 为暂停迁移
+gluster volume replace-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data pause
+abort 为终止迁移
+gluster volume replace-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data abort
+status 查看迁移状态
+gluster volume replace-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data status
+迁移结束后使用commit 来生效
+gluster volume replace-brick models swarm-node-2:/opt/gluster/data swarm-node-3:/opt/gluster/data commit
